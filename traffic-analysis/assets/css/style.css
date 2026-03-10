@@ -1,0 +1,130 @@
+/* Trafik Kazası Tutanak Analiz Sistemi - Özel Stiller */
+
+/* Genel */
+* {
+    box-sizing: border-box;
+}
+
+/* Drop Zone aktif durumu */
+.drop-active {
+    border-color: #3b82f6 !important;
+    background-color: #eff6ff !important;
+}
+
+/* Önizleme kartları */
+.preview-card {
+    position: relative;
+    border-radius: 0.5rem;
+    overflow: hidden;
+    border: 1px solid #e5e7eb;
+    background: #f9fafb;
+}
+
+.preview-card img {
+    width: 100%;
+    height: 120px;
+    object-fit: cover;
+}
+
+.preview-card .remove-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 24px;
+    height: 24px;
+    background: rgba(239, 68, 68, 0.9);
+    color: white;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    line-height: 1;
+    transition: background 0.2s;
+}
+
+.preview-card .remove-btn:hover {
+    background: rgba(220, 38, 38, 1);
+}
+
+.preview-card .file-name {
+    padding: 4px 8px;
+    font-size: 0.75rem;
+    color: #6b7280;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Sonuç içeriği formatlaması */
+#resultContent h1,
+#resultContent h2,
+#resultContent h3 {
+    color: #1f2937;
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+#resultContent h1 { font-size: 1.25rem; font-weight: 700; }
+#resultContent h2 { font-size: 1.125rem; font-weight: 600; }
+#resultContent h3 { font-size: 1rem; font-weight: 600; }
+
+#resultContent p {
+    color: #374151;
+    margin-bottom: 0.75rem;
+    line-height: 1.6;
+}
+
+#resultContent ul,
+#resultContent ol {
+    margin-left: 1.5rem;
+    margin-bottom: 0.75rem;
+}
+
+#resultContent li {
+    margin-bottom: 0.25rem;
+    color: #374151;
+}
+
+#resultContent strong {
+    color: #111827;
+}
+
+/* Spinner animasyonu */
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+    animation: spin 1s linear infinite;
+}
+
+/* Yazdırma stili */
+@media print {
+    header, footer,
+    #analysisForm,
+    #progressSection,
+    #errorSection,
+    #printBtn,
+    #newAnalysisBtn,
+    .bg-blue-50,
+    .bg-yellow-50 {
+        display: none !important;
+    }
+
+    #resultSection {
+        display: block !important;
+        margin: 0;
+    }
+
+    #resultSection .bg-white {
+        box-shadow: none;
+        border: none;
+    }
+
+    body {
+        background: white;
+    }
+}
