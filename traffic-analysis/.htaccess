@@ -6,7 +6,7 @@ RewriteCond %{HTTPS} off
 RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
 # config.php ve includes klasörünü dış erişime kapat
-<FilesMatch "^config\.php$">
+<FilesMatch "^(config\.php|\.env\.php|api_keys\.json)$">
     Deny from all
 </FilesMatch>
 

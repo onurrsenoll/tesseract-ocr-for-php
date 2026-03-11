@@ -3,7 +3,7 @@
  * Trafik Kazası Tutanak Analiz Sistemi - API İşleyici
  *
  * Bu dosya yüklenen görselleri AI servisine gönderir ve analiz sonucunu döndürür.
- * API anahtarları yalnızca sunucu tarafında kalır, frontend'e asla açılmaz.
+ * Birden fazla API anahtarını sırasıyla dener (fallback sistemi).
  */
 
 require_once __DIR__ . '/config.php';
@@ -62,12 +62,15 @@ if (empty($images)) {
 $systemPrompt = getAnalysisSystemPrompt();
 $userPrompt = getAnalysisUserPrompt($tarafA, $tarafB);
 
-// AI API çağrısı
+// API anahtarlarını yükle (fallback sistemli)
+$apiKeys = loadApiKeys();
+
+// AI API çağrısı (fallback destekli)
 try {
-    $result = callAIProvider($images, $systemPrompt, $userPrompt);
+    $result = callAIWithFallback($images, $systemPrompt, $userPrompt, $apiKeys);
 
     // Başarılı analiz logu
-    logAnalysis($uploadSession['id'], AI_PROVIDER, count($images), 'success');
+    logAnalysis($uploadSession['id'], $result['provider'], count($images), 'success');
 
     // Geçici dosyaları temizle (KVKK uyumu)
     cleanupTempFiles($filePaths);
@@ -75,16 +78,18 @@ try {
 
     jsonResponse([
         'success'  => true,
-        'analysis' => $result,
+        'analysis' => $result['text'],
         'metadata' => [
-            'provider'    => AI_PROVIDER,
+            'provider'    => $result['provider'],
+            'key_index'   => $result['key_index'],
             'image_count' => count($images),
             'timestamp'   => date('Y-m-d H:i:s'),
+            'fallback_attempts' => $result['attempts'],
         ],
     ]);
 } catch (Exception $e) {
     logError('AI API hatası: ' . $e->getMessage());
-    logAnalysis($uploadSession['id'], AI_PROVIDER, count($images), 'error', $e->getMessage());
+    logAnalysis($uploadSession['id'], $apiKeys['active_provider'] ?? AI_PROVIDER, count($images), 'error', $e->getMessage());
 
     // Hata durumunda da dosyaları temizle
     cleanupTempFiles($filePaths);
@@ -94,6 +99,146 @@ try {
         'success' => false,
         'error'   => 'Analiz sırasında bir hata oluştu: ' . $e->getMessage(),
     ], 500);
+}
+
+// ============================================================
+// API ANAHTAR YÖNETİMİ
+// ============================================================
+
+/**
+ * API anahtarlarını yükler (settings'den veya config'den).
+ */
+function loadApiKeys(): array
+{
+    $keysFile = __DIR__ . '/api_keys.json';
+    $settings = [
+        'keys' => [],
+        'active_provider' => AI_PROVIDER,
+        'fallback_enabled' => true,
+    ];
+
+    if (file_exists($keysFile)) {
+        $data = json_decode(file_get_contents($keysFile), true);
+        if ($data && !empty($data['keys'])) {
+            return array_merge($settings, $data);
+        }
+    }
+
+    // Fallback: config.php'den oku
+    $configKeys = [];
+    if (!empty(CLAUDE_API_KEY)) {
+        $configKeys[] = ['provider' => 'claude', 'key' => CLAUDE_API_KEY, 'status' => 'untested'];
+    }
+    if (!empty(GEMINI_API_KEY)) {
+        $configKeys[] = ['provider' => 'gemini', 'key' => GEMINI_API_KEY, 'status' => 'untested'];
+    }
+    if (!empty(OPENAI_API_KEY)) {
+        $configKeys[] = ['provider' => 'openai', 'key' => OPENAI_API_KEY, 'status' => 'untested'];
+    }
+
+    $settings['keys'] = $configKeys;
+    return $settings;
+}
+
+/**
+ * Fallback sistemiyle AI API çağrısı yapar.
+ * Önce tercih edilen sağlayıcının anahtarlarını dener,
+ * sonra diğer sağlayıcılara geçer.
+ */
+function callAIWithFallback(array $images, string $systemPrompt, string $userPrompt, array $apiKeys): array
+{
+    $allKeys = $apiKeys['keys'] ?? [];
+    $preferredProvider = $apiKeys['active_provider'] ?? AI_PROVIDER;
+    $fallbackEnabled = $apiKeys['fallback_enabled'] ?? true;
+
+    if (empty($allKeys)) {
+        throw new Exception('Hiçbir API anahtarı yapılandırılmamış. Lütfen Ayarlar sayfasından en az bir anahtar ekleyin.');
+    }
+
+    // Anahtarları sağlayıcıya göre grupla
+    $keysByProvider = ['claude' => [], 'gemini' => [], 'openai' => []];
+    foreach ($allKeys as $index => $keyData) {
+        $provider = $keyData['provider'] ?? 'claude';
+        if (isset($keysByProvider[$provider])) {
+            $keysByProvider[$provider][] = ['key' => $keyData['key'], 'index' => $index];
+        }
+    }
+
+    // Deneme sırası: önce tercih edilen, sonra diğerleri
+    $providerOrder = [$preferredProvider];
+    if ($fallbackEnabled) {
+        foreach (['claude', 'gemini', 'openai'] as $p) {
+            if ($p !== $preferredProvider) {
+                $providerOrder[] = $p;
+            }
+        }
+    }
+
+    $errors = [];
+    $attempts = 0;
+
+    foreach ($providerOrder as $provider) {
+        $keys = $keysByProvider[$provider] ?? [];
+
+        foreach ($keys as $keyEntry) {
+            $attempts++;
+            $apiKey = $keyEntry['key'];
+
+            try {
+                $text = match ($provider) {
+                    'claude' => callClaudeWithKey($images, $systemPrompt, $userPrompt, $apiKey),
+                    'gemini' => callGeminiWithKey($images, $systemPrompt, $userPrompt, $apiKey),
+                    'openai' => callOpenAIWithKey($images, $systemPrompt, $userPrompt, $apiKey),
+                    default => throw new Exception('Geçersiz sağlayıcı: ' . $provider),
+                };
+
+                // Başarılı - anahtarın durumunu güncelle
+                updateKeyStatus($keyEntry['index'], 'valid');
+
+                return [
+                    'text' => $text,
+                    'provider' => $provider,
+                    'key_index' => $keyEntry['index'],
+                    'attempts' => $attempts,
+                ];
+            } catch (Exception $e) {
+                $maskedKey = substr($apiKey, 0, 10) . '...' . substr($apiKey, -4);
+                $errorMsg = "[$provider] $maskedKey: " . $e->getMessage();
+                $errors[] = $errorMsg;
+                logError("Fallback deneme $attempts: $errorMsg");
+
+                // Anahtarı geçersiz olarak işaretle
+                updateKeyStatus($keyEntry['index'], 'invalid');
+            }
+        }
+
+        // Fallback kapalıysa diğer sağlayıcıları deneme
+        if (!$fallbackEnabled) {
+            break;
+        }
+    }
+
+    // Tüm denemeler başarısız
+    $allErrors = implode(' | ', $errors);
+    throw new Exception("Tüm API anahtarları başarısız oldu ($attempts deneme). Hatalar: $allErrors");
+}
+
+/**
+ * Anahtar durumunu JSON dosyasında günceller.
+ */
+function updateKeyStatus(int $keyIndex, string $status): void
+{
+    $keysFile = __DIR__ . '/api_keys.json';
+    if (!file_exists($keysFile)) {
+        return;
+    }
+
+    $data = json_decode(file_get_contents($keysFile), true);
+    if ($data && isset($data['keys'][$keyIndex])) {
+        $data['keys'][$keyIndex]['status'] = $status;
+        $data['keys'][$keyIndex]['last_tested'] = date('Y-m-d H:i:s');
+        file_put_contents($keysFile, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    }
 }
 
 // ============================================================
@@ -161,31 +306,54 @@ function getAnalysisUserPrompt(string $tarafA, string $tarafB): string
     return $prompt;
 }
 
+// ============================================================
+// API ÇAĞRI FONKSİYONLARI (anahtar parametreli)
+// ============================================================
+
 /**
- * AI sağlayıcısına göre API çağrısı yapar.
+ * Claude API çağrısı (belirli anahtar ile).
  */
-function callAIProvider(array $images, string $systemPrompt, string $userPrompt): string
+function callClaudeWithKey(array $images, string $systemPrompt, string $userPrompt, string $apiKey): string
 {
-    return match (AI_PROVIDER) {
-        'gemini'  => callGemini($images, $systemPrompt, $userPrompt),
-        'openai'  => callOpenAI($images, $systemPrompt, $userPrompt),
-        'claude'  => callClaude($images, $systemPrompt, $userPrompt),
-        default   => throw new Exception('Geçersiz AI sağlayıcısı: ' . AI_PROVIDER),
-    };
+    $content = [];
+    foreach ($images as $img) {
+        $content[] = [
+            'type'   => 'image',
+            'source' => [
+                'type'       => 'base64',
+                'media_type' => $img['mime'],
+                'data'       => $img['base64'],
+            ],
+        ];
+    }
+    $content[] = ['type' => 'text', 'text' => $userPrompt];
+
+    $payload = [
+        'model'      => CLAUDE_MODEL,
+        'max_tokens' => 4096,
+        'system'     => $systemPrompt,
+        'messages'   => [['role' => 'user', 'content' => $content]],
+    ];
+
+    $response = makeCurlRequest(CLAUDE_API_URL, $payload, [
+        'Content-Type: application/json',
+        'x-api-key: ' . $apiKey,
+        'anthropic-version: 2023-06-01',
+    ]);
+
+    if (isset($response['content'][0]['text'])) {
+        return $response['content'][0]['text'];
+    }
+
+    throw new Exception('Claude API yanıtı beklenmeyen formatta.');
 }
 
 /**
- * Google Gemini API çağrısı.
+ * Gemini API çağrısı (belirli anahtar ile).
  */
-function callGemini(array $images, string $systemPrompt, string $userPrompt): string
+function callGeminiWithKey(array $images, string $systemPrompt, string $userPrompt, string $apiKey): string
 {
-    if (empty(GEMINI_API_KEY)) {
-        throw new Exception('Gemini API anahtarı yapılandırılmamış.');
-    }
-
     $parts = [];
-
-    // Görselleri ekle
     foreach ($images as $img) {
         $parts[] = [
             'inline_data' => [
@@ -194,48 +362,31 @@ function callGemini(array $images, string $systemPrompt, string $userPrompt): st
             ],
         ];
     }
-
-    // Metin promptunu ekle
     $parts[] = ['text' => $userPrompt];
 
     $payload = [
-        'system_instruction' => [
-            'parts' => [['text' => $systemPrompt]],
-        ],
-        'contents' => [
-            ['parts' => $parts],
-        ],
-        'generationConfig' => [
-            'temperature'     => 0.3,
-            'maxOutputTokens' => 4096,
-        ],
+        'system_instruction' => ['parts' => [['text' => $systemPrompt]]],
+        'contents' => [['parts' => $parts]],
+        'generationConfig' => ['temperature' => 0.3, 'maxOutputTokens' => 4096],
     ];
 
-    $url = GEMINI_API_URL . GEMINI_MODEL . ':generateContent?key=' . GEMINI_API_KEY;
+    $url = GEMINI_API_URL . GEMINI_MODEL . ':generateContent?key=' . $apiKey;
 
-    $response = makeCurlRequest($url, $payload, [
-        'Content-Type: application/json',
-    ]);
+    $response = makeCurlRequest($url, $payload, ['Content-Type: application/json']);
 
     if (isset($response['candidates'][0]['content']['parts'][0]['text'])) {
         return $response['candidates'][0]['content']['parts'][0]['text'];
     }
 
-    throw new Exception('Gemini API yanıtı beklenmeyen formatta: ' . json_encode($response));
+    throw new Exception('Gemini API yanıtı beklenmeyen formatta.');
 }
 
 /**
- * OpenAI API çağrısı.
+ * OpenAI API çağrısı (belirli anahtar ile).
  */
-function callOpenAI(array $images, string $systemPrompt, string $userPrompt): string
+function callOpenAIWithKey(array $images, string $systemPrompt, string $userPrompt, string $apiKey): string
 {
-    if (empty(OPENAI_API_KEY)) {
-        throw new Exception('OpenAI API anahtarı yapılandırılmamış.');
-    }
-
     $content = [];
-
-    // Görselleri ekle
     foreach ($images as $img) {
         $content[] = [
             'type'      => 'image_url',
@@ -245,12 +396,7 @@ function callOpenAI(array $images, string $systemPrompt, string $userPrompt): st
             ],
         ];
     }
-
-    // Metin promptunu ekle
-    $content[] = [
-        'type' => 'text',
-        'text' => $userPrompt,
-    ];
+    $content[] = ['type' => 'text', 'text' => $userPrompt];
 
     $payload = [
         'model'       => OPENAI_MODEL,
@@ -264,65 +410,14 @@ function callOpenAI(array $images, string $systemPrompt, string $userPrompt): st
 
     $response = makeCurlRequest(OPENAI_API_URL, $payload, [
         'Content-Type: application/json',
-        'Authorization: Bearer ' . OPENAI_API_KEY,
+        'Authorization: Bearer ' . $apiKey,
     ]);
 
     if (isset($response['choices'][0]['message']['content'])) {
         return $response['choices'][0]['message']['content'];
     }
 
-    throw new Exception('OpenAI API yanıtı beklenmeyen formatta: ' . json_encode($response));
-}
-
-/**
- * Claude (Anthropic) API çağrısı.
- */
-function callClaude(array $images, string $systemPrompt, string $userPrompt): string
-{
-    if (empty(CLAUDE_API_KEY)) {
-        throw new Exception('Claude API anahtarı yapılandırılmamış.');
-    }
-
-    $content = [];
-
-    // Görselleri ekle
-    foreach ($images as $img) {
-        $content[] = [
-            'type'   => 'image',
-            'source' => [
-                'type'       => 'base64',
-                'media_type' => $img['mime'],
-                'data'       => $img['base64'],
-            ],
-        ];
-    }
-
-    // Metin promptunu ekle
-    $content[] = [
-        'type' => 'text',
-        'text' => $userPrompt,
-    ];
-
-    $payload = [
-        'model'      => CLAUDE_MODEL,
-        'max_tokens' => 4096,
-        'system'     => $systemPrompt,
-        'messages'   => [
-            ['role' => 'user', 'content' => $content],
-        ],
-    ];
-
-    $response = makeCurlRequest(CLAUDE_API_URL, $payload, [
-        'Content-Type: application/json',
-        'x-api-key: ' . CLAUDE_API_KEY,
-        'anthropic-version: 2023-06-01',
-    ]);
-
-    if (isset($response['content'][0]['text'])) {
-        return $response['content'][0]['text'];
-    }
-
-    throw new Exception('Claude API yanıtı beklenmeyen formatta: ' . json_encode($response));
+    throw new Exception('OpenAI API yanıtı beklenmeyen formatta.');
 }
 
 /**
