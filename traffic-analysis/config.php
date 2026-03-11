@@ -11,13 +11,19 @@ error_reporting(E_ALL);
 ini_set('display_errors', '0');
 ini_set('log_errors', '1');
 
+// Gizli bilgileri .env.php'den yükle
+$envFile = __DIR__ . '/.env.php';
+if (file_exists($envFile)) {
+    require_once $envFile;
+}
+
 // ============================================================
 // API YAPILANDIRMASI
 // Kullanmak istediğiniz AI servisinin bilgilerini doldurun.
 // Yalnızca BİR servis aktif olmalıdır.
 // ============================================================
 
-define('AI_PROVIDER', 'gemini'); // 'gemini', 'openai' veya 'claude'
+define('AI_PROVIDER', 'claude'); // 'gemini', 'openai' veya 'claude'
 
 // Google Gemini
 define('GEMINI_API_KEY', '');
@@ -30,7 +36,7 @@ define('OPENAI_MODEL', 'gpt-4o');
 define('OPENAI_API_URL', 'https://api.openai.com/v1/chat/completions');
 
 // Claude (Anthropic)
-define('CLAUDE_API_KEY', '');
+define('CLAUDE_API_KEY', defined('ENV_CLAUDE_API_KEY') ? ENV_CLAUDE_API_KEY : '');
 define('CLAUDE_MODEL', 'claude-sonnet-4-20250514');
 define('CLAUDE_API_URL', 'https://api.anthropic.com/v1/messages');
 
@@ -39,9 +45,9 @@ define('CLAUDE_API_URL', 'https://api.anthropic.com/v1/messages');
 // ============================================================
 
 define('DB_HOST', 'localhost');
-define('DB_NAME', 'trafik_analiz');
-define('DB_USER', 'root');
-define('DB_PASS', '');
+define('DB_NAME', 'mrhasard_finansal');
+define('DB_USER', 'mrhasard_finansal');
+define('DB_PASS', defined('ENV_DB_PASS') ? ENV_DB_PASS : '');
 define('DB_CHARSET', 'utf8mb4');
 
 // ============================================================

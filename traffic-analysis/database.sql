@@ -1,11 +1,11 @@
 -- Trafik Kazası Tutanak Analiz Sistemi - Veritabanı Şeması
 -- Bu dosyayı cPanel phpMyAdmin üzerinden içe aktarın.
 
-CREATE DATABASE IF NOT EXISTS `trafik_analiz`
+CREATE DATABASE IF NOT EXISTS `mrhasard_finansal`
     DEFAULT CHARACTER SET utf8mb4
     DEFAULT COLLATE utf8mb4_unicode_ci;
 
-USE `trafik_analiz`;
+USE `mrhasard_finansal`;
 
 -- Analiz log tablosu
 CREATE TABLE IF NOT EXISTS `analysis_logs` (
