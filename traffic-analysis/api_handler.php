@@ -92,7 +92,7 @@ try {
 
     jsonResponse([
         'success' => false,
-        'error'   => 'Analiz sırasında bir hata oluştu. Lütfen tekrar deneyin.',
+        'error'   => 'Analiz sırasında bir hata oluştu: ' . $e->getMessage(),
     ], 500);
 }
 
@@ -332,10 +332,15 @@ function makeCurlRequest(string $url, array $payload, array $headers): array
 {
     $ch = curl_init();
 
+    $jsonPayload = json_encode($payload);
+    if ($jsonPayload === false) {
+        throw new Exception('JSON encode hatası: ' . json_last_error_msg());
+    }
+
     curl_setopt_array($ch, [
         CURLOPT_URL            => $url,
         CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => json_encode($payload),
+        CURLOPT_POSTFIELDS     => $jsonPayload,
         CURLOPT_HTTPHEADER     => $headers,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT        => 120,
@@ -343,6 +348,12 @@ function makeCurlRequest(string $url, array $payload, array $headers): array
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
     ]);
+
+    // Shared hosting'de CA bundle bulunamazsa fallback
+    $caPath = '/etc/ssl/certs/ca-certificates.crt';
+    if (file_exists($caPath)) {
+        curl_setopt($ch, CURLOPT_CAINFO, $caPath);
+    }
 
     $responseBody = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
